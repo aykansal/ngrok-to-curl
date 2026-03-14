@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ngrok HTTP to cURL Converter</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/@knadh/oat/oat.min.css">
+    <script src="https://unpkg.com/@knadh/oat/oat.min.js" defer></script>
+    
+    <style>
+        /* Custom Notion-like Black & White Theme */
+        :root {
+            --background: #ffffff;
+            --foreground: #37352f;
+            --card: #ffffff;
+            --card-foreground: #37352f;
+            --primary: #37352f; /* Notion Black */
+            --primary-foreground: #ffffff;
+            --secondary: #f1f1ef; /* Notion Gray */
+            --secondary-foreground: #37352f;
+            --muted: #f1f1ef;
+            --muted-foreground: #787774;
+            --faint: #f7f6f3; /* Notion Code Block Bg */
+            --border: #e9e9e7;
+            --input: #e9e9e7;
+            --ring: #2383e2; /* Notion Blue for focus */
+            
+            --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
+            --font-mono: "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace;
+            
+            --radius-medium: 4px;
+            --radius-small: 3px;
+            
+            --shadow-small: 0 1px 2px rgba(0, 0, 0, 0.04);
+            --shadow-medium: rgba(15, 15, 15, 0.05) 0px 0px 0px 1px, rgba(15, 15, 15, 0.1) 0px 3px 6px, rgba(15, 15, 15, 0.2) 0px 9px 24px;
+        }
+
+        /* Notion Dark Theme */
+        [data-theme="dark"] {
+            --background: #191919;
+            --foreground: #ffffff;
+            --card: #191919;
+            --card-foreground: #ffffff;
+            --primary: #ffffff;
+            --primary-foreground: #191919;
+            --secondary: #2f2f2f;
+            --secondary-foreground: #ffffff;
+            --muted: #2f2f2f;
+            --muted-foreground: #9b9b9b;
+            --faint: #202020;
+            --border: #373737;
+            --input: #373737;
+            --ring: #2383e2;
+        }
+
+        /* Custom App Styling */
+        body {
+            display: flex;
+            justify-content: center;
+        }
+
+        .app-container {
+            width: 100%;
+            max-width: 900px;
+            padding: var(--space-8) var(--space-4);
+        }
+
+        textarea {
+            font-family: var(--font-mono);
+            font-size: var(--text-7);
+            min-height: 250px;
+            background-color: var(--faint);
+            border: 1px solid var(--border);
+        }
+
+        .output-panel {
+            position: relative;
+            background-color: var(--faint);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-medium);
+            padding: var(--space-4);
+            font-family: var(--font-mono);
+            font-size: var(--text-7);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            min-height: 100px;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: var(--space-2);
+            right: var(--space-2);
+            background: var(--background);
+            border: 1px solid var(--border);
+        }
+
+        .tab-content {
+            padding-top: var(--space-4);
+        }
+        
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+
+<div class="app-container">
+    <header class="hstack justify-between mb-6">
+        <h1>HTTP to cURL</h1>
+        <button class="ghost small" onclick="toggleTheme()" data-tooltip="Toggle dark mode">
+            🌓 Theme
+        </button>
+    </header>
+
+    <article class="card">
+        <label data-field>
+            <strong class="mb-2" style="display:block;">Raw HTTP Request</strong>
+            <textarea id="httpInput" placeholder="Paste your raw HTTP request here..."></textarea>
+        </label>
+        
+        <footer class="hstack mt-4 justify-end">
+            <button onclick="generateCommands()">Convert to cURL</button>
+        </footer>
+    </article>
+
+    <div id="resultsContainer" class="mt-6 hidden">
+        <ot-tabs>
+            <div role="tablist">
+                <button role="tab">Bash (Linux / macOS)</button>
+                <button role="tab">CMD (Windows)</button>
+            </div>
+            
+            <div role="tabpanel" class="tab-content">
+                <div class="output-panel">
+                    <button class="small copy-btn" onclick="copyToClipboard('bash')">Copy</button>
+                    <div id="bashOutput"></div>
+                </div>
+            </div>
+            
+            <div role="tabpanel" class="tab-content">
+                <div class="output-panel">
+                    <button class="small copy-btn" onclick="copyToClipboard('cmd')">Copy</button>
+                    <div id="cmdOutput"></div>
+                </div>
+            </div>
+        </ot-tabs>
+    </div>
+</div>
+
+<script>
+    let currentBashCmd = "";
+    let currentCmdCmd = "";
+
+    // Theme toggler
+    function toggleTheme() {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
+    }
+
+    // Set initial theme based on system preference
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    }
+
+    function parseHttp(rawText) {
+        if (!rawText.trim()) return null;
+
+        const parts = rawText.split(/\r?\n\r?\n/);
+        const headerBlock = parts[0];
+        const body = parts.length > 1 ? parts.slice(1).join('\n\n') : '';
+
+        const headerLines = headerBlock.split(/\r?\n/);
+        if (headerLines.length === 0) return null;
+
+        const requestLine = headerLines[0].split(' ');
+        if (requestLine.length < 2) return null;
+        
+        const method = requestLine[0];
+        const path = requestLine[1];
+        
+        const headers = [];
+        let host = '';
+        let proto = 'http';
+
+        for (let i = 1; i < headerLines.length; i++) {
+            const line = headerLines[i];
+            const separatorIdx = line.indexOf(':');
+            if (separatorIdx === -1) continue;
+
+            const key = line.substring(0, separatorIdx).trim();
+            const value = line.substring(separatorIdx + 1).trim();
+
+            if (key.toLowerCase() === 'x-forwarded-host') {
+                host = value;
+            } else if (key.toLowerCase() === 'host') {
+                if (!host) host = value;
+            } else if (key.toLowerCase() === 'x-forwarded-proto') {
+                proto = value;
+            }
+            
+            if (key.toLowerCase() !== 'content-length') {
+                headers.push({ key, value });
+            }
+        }
+
+        if (!host) {
+            host = "localhost"; // Fallback
+        }
+
+        const url = `${proto}://${host}${path}`;
+        return { method, url, headers, body };
+    }
+
+    function buildCurl(parsed, osType) {
+        let cmd = `curl -X ${parsed.method} "${parsed.url}"`;
+        const lc = osType === 'bash' ? ' \\\n  ' : ' ^\n  ';
+
+        parsed.headers.forEach(h => {
+            cmd += `${lc}-H "${h.key}: ${h.value}"`;
+        });
+
+        if (parsed.body) {
+            if (osType === 'bash') {
+                const escapedBody = parsed.body.replace(/'/g, "'\\''");
+                cmd += `${lc}-d '${escapedBody}'`;
+            } else {
+                const escapedBody = parsed.body.replace(/"/g, '""');
+                cmd += `${lc}-d "${escapedBody}"`;
+            }
+        }
+        return cmd;
+    }
+
+    function generateCommands() {
+        const rawHttp = document.getElementById('httpInput').value;
+        const parsed = parseHttp(rawHttp);
+        
+        if (!parsed) {
+            // Using Oat UI's native Toast API for errors
+            ot.toast('Invalid HTTP request format.', 'Error', { variant: 'danger' });
+            return;
+        }
+
+        currentBashCmd = buildCurl(parsed, 'bash');
+        currentCmdCmd = buildCurl(parsed, 'cmd');
+
+        document.getElementById('bashOutput').textContent = currentBashCmd;
+        document.getElementById('cmdOutput').textContent = currentCmdCmd;
+        
+        document.getElementById('resultsContainer').classList.remove('hidden');
+        ot.toast('cURL commands generated successfully!', 'Success', { variant: 'success', duration: 2500 });
+    }
+
+    function copyToClipboard(osType) {
+        const textToCopy = osType === 'bash' ? currentBashCmd : currentCmdCmd;
+        if (!textToCopy) return;
+
+        navigator.clipboard.writeText(textToCopy).then(() => {
+            // Using Oat UI's native Toast API for copy success
+            ot.toast('Copied to clipboard!', '', { variant: 'success', duration: 2000, placement: 'bottom-right' });
+        });
+    }
+</script>
+
+</body>
+</html>
